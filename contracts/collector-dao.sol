@@ -37,7 +37,7 @@ contract CollectorDao {
     }
 
     NFT[] public nfts;
-    address wrappedEthAddress;
+    address public wrappedEthAddress;
     uint256 public nextProposalId = 0;
     mapping(address => Member) public members;
     mapping(uint256 => Proposal) public proposals;
@@ -83,11 +83,13 @@ contract CollectorDao {
         Member storage delegateFromMember = members[from];
         require(delegateFromMember.startDate > 0, "delegateFromAddress is not a member");
 
-        // Make sure the votes you want back have not already been cast, maybe it is better to just manipulate the actual live proposal vote counts instead
+        // Make sure the votes you want back have not already been cast, maybe it is better to just
+        // manipulate the actual live proposal vote counts instead
         for (uint256 i = 0; i < nextProposalId; i++) {
-            if (block.timestamp < proposals[i].deadline) {
+            Proposal storage _proposal = proposals[i];
+            if (block.timestamp < _proposal.deadline) {
                 require(
-                    proposals[i].votesByMember[from] == Vote.NullVote,
+                    _proposal.votesByMember[from] == Vote.NullVote,
                     "Can only undelegate votes when delegatee is not in the middle of voting"
                 );
             }
@@ -101,22 +103,30 @@ contract CollectorDao {
     function submitProposal(
         address contractAddress,
         bytes calldata signature,
-        uint256 quorumDeadline
+        uint256 quorumDeadline,
+        uint256 value
     ) external onlyMember returns (uint256 proposalId) {
         proposalId = nextProposalId;
 
         Proposal storage proposal = proposals[proposalId];
-        proposal.quorumDeadline = quorumDeadline;
+
+        uint256 _minQuorumDeadline = block.timestamp + 7 days;
+        if (quorumDeadline < _minQuorumDeadline) {
+            proposal.quorumDeadline = quorumDeadline;
+        } else {
+            proposal.quorumDeadline = _minQuorumDeadline;
+        }
+
         proposal.signature = signature;
         proposal.contractAddress = contractAddress;
+        proposal.value = value;
 
         nextProposalId += 1;
     }
 
     function castVote(uint256 proposalId, bool vote) external onlyMember {
         Proposal storage proposal = proposals[proposalId];
-        Vote currentVote = proposal.votesByMember[msg.sender];
-        require(currentVote == Vote.NullVote, "Members can only vote once");
+        require(proposal.votesByMember[msg.sender] == Vote.NullVote, "Members can only vote once");
         if (vote) {
             proposal.votesByMember[msg.sender] = Vote.YesVote;
             proposal.yesTotal += members[msg.sender].votingPower;
@@ -128,16 +138,16 @@ contract CollectorDao {
         // Update if quroum has been reached
         if (
             proposal.deadline == 0 &&
-            proposal.quorumDeadline > block.timestamp &&
+            proposal.quorumDeadline < block.timestamp &&
             (proposal.yesTotal + proposal.noTotal) > totalMembers / 4
         ) {
-            proposal.deadline = block.timestamp + 604800; // 7 days
+            proposal.deadline = block.timestamp + 7 days;
         }
     }
 
     function executeProposal(uint256 proposalId) external returns (bool sent) {
         Proposal storage proposal = proposals[proposalId];
-        require(proposal.deadline > block.timestamp, "Proposal not passed deadline");
+        require(proposal.deadline < block.timestamp, "Proposal not passed deadline");
         require(proposal.yesTotal > proposal.noTotal, "Proposal did not pass");
         require(proposal.isExecuted == false, "Proposal already executed");
 
